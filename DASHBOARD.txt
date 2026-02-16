@@ -1,0 +1,130 @@
+import streamlit as st
+import pandas as pd
+import io
+
+def main():
+    """
+    Fonction principale de l'application Streamlit.
+    Version adaptée pour 6 colonnes (avec Humidité).
+    """
+    
+    # --- 1. Configuration de la Page ---
+    st.set_page_config(
+        page_title="Analyseur Datalog WWWW",
+        page_icon="🛰️",
+        layout="wide"
+    )
+
+    # --- 2. Titre ---
+    st.title("🛰️ Analyseur de Fichier Datalog WWWW")
+    st.write("Glissez-déposez votre fichier `datalog.txt` ci-dessous pour l'analyser.")
+
+    # --- 3. La zone de "Drag-and-Drop" ---
+    uploaded_file = st.file_uploader(
+        "Choisissez votre fichier datalog.txt",
+        type=['txt']
+    )
+
+    # --- 4. Logique de Traitement ---
+    if uploaded_file is None:
+        # Message d'attente si aucun fichier n'est chargé
+        st.info("En attente d'un fichier...")
+        st.divider()
+        st.subheader("Format attendu (par ligne) :")
+        # Mise à jour de l'exemple de format
+        st.code("AAAA/MM/JJ HH:MM:SS;ID;TEMP;HUM;PRESS;GPS_DATA", language="text")
+
+    else:
+        # Si un fichier est chargé
+        try:
+            # --- 5. Lecture des données ---
+            # Mise à jour des noms de colonnes (6)
+            noms_colonnes = ['Date/Heure', 'ID_Mesure', 'Température', 'Humidité', 'Pression', 'GPS']
+
+            df = pd.read_csv(
+                uploaded_file, 
+                sep=';',
+                header=None,
+                names=noms_colonnes,
+                skipinitialspace=True,
+                encoding='utf-8-sig' # Gère les caractères invisibles (BOM)
+            )
+            
+            # --- 6. Conversion des dates (ignore les erreurs) ---
+            df['Timestamp_dt'] = pd.to_datetime(
+                df['Date/Heure'], 
+                format='%Y/%m/%d %H:%M:%S', 
+                errors='coerce' # 'coerce' met NaT (Not a Time) si erreur
+            )
+            
+            # **SIMPLIFICATION** : On supprime les lignes où la date est invalide
+            df = df.dropna(subset=['Timestamp_dt'])
+            
+            if df.empty:
+                st.warning("Aucune donnée valide n'a été trouvée dans le fichier.")
+                return # Arrête le script ici
+
+            st.success(f"Fichier '{uploaded_file.name}' chargé ! {len(df)} lignes valides trouvées.")
+            st.divider()
+
+            # --- 7. Logique d'analyse GPS ---
+            df_gps = df[df['GPS'] != 'GPS NA'].copy()
+            df_gps = df_gps[df_gps['GPS'].notna()]
+            df_map = pd.DataFrame(columns=['lat', 'lon']) # Initialiser un df vide
+
+            if not df_gps.empty:
+                try:
+                    parts = df_gps['GPS'].str.split(',', expand=True)
+                    if parts.shape[1] >= 4:
+                        parts[0] = pd.to_numeric(parts[0], errors='coerce')
+                        parts[2] = pd.to_numeric(parts[2], errors='coerce')
+                        
+                        df_gps['lat_val'] = parts[0]
+                        df_gps['lat_hemi'] = parts[1].str.strip()
+                        df_gps['lon_val'] = parts[2]
+                        df_gps['lon_hemi'] = parts[3].str.strip()
+
+                        df_gps['lat'] = df_gps['lat_val'] * df_gps['lat_hemi'].apply(lambda x: -1 if str(x) == 'S' else 1)
+                        df_gps['lon'] = df_gps['lon_val'] * df_gps['lon_hemi'].apply(lambda x: -1 if str(x) == 'W' else 1)
+                        
+                        df_map = df_gps[['lat', 'lon']].dropna().copy()
+                except Exception:
+                    st.warning("Certaines données GPS n'ont pas pu être analysées.")
+
+            # --- 8. Affichage des Graphiques et de la Carte ---
+            st.header("Graphiques des Données")
+            chart_data = df.rename(columns={'Timestamp_dt': 'index'}).set_index('index')
+            
+            st.subheader("Température (°C)")
+            st.line_chart(chart_data['Température'])
+            
+            st.subheader("Humidité (%)")
+            st.line_chart(chart_data['Humidité'])
+            
+            st.subheader("Pression (hPa)")
+            st.line_chart(chart_data['Pression'])
+
+
+            st.header("Carte des Points GPS")
+            if not df_map.empty:
+                st.map(df_map)
+            else:
+                st.info("Aucune donnée GPS valide (format 45.1,N,5.4,E) n'a été trouvée.")
+
+            # --- 9. Affichage du SEUL Tableau ---
+            st.header("Données Complètes")
+            df['Date'] = df['Timestamp_dt'].dt.date
+            df['Heure'] = df['Timestamp_dt'].dt.time
+            # Mise à jour des colonnes du tableau final
+            colonnes_a_afficher = ['Date', 'Heure', 'ID_Mesure', 'Température', 'Humidité', 'Pression', 'GPS']
+            
+            # Voici le seul et unique tableau
+            st.dataframe(df[colonnes_a_afficher], use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Une erreur majeure est survenue : {e}")
+
+# --- Point d'entrée pour lancer le script ---
+if __name__ == "__main__":
+    main()
+
